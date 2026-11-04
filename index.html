@@ -94,114 +94,82 @@
   </div>
 </main>
 
-<footer>HTML + CSS + JavaScript &middot; data is saved in your browser</footer>
+<footer>HTML + CSS + JavaScript frontend &middot; C backend</footer>
 
 <script>
-  // ---------- Data (same model as the C backend) ----------
-  const KEY = "roomfinder-data";
-  const seed = {
-    classes: [
-      { subject: "Mathematics", faculty: "Dr. Roy", cls: "CSE-3A", room: "101", building: "Main Block",    slot: "Mon-10AM" },
-      { subject: "Physics",     faculty: "Dr. Das", cls: "CSE-3A", room: "204", building: "Science Block", slot: "Mon-11AM" },
-      { subject: "Programming", faculty: "Ms. Sen", cls: "CSE-3B", room: "305", building: "Main Block",    slot: "Mon-10AM" }
-    ],
-    history: []
-  };
-  let db;
-  try { db = JSON.parse(localStorage.getItem(KEY)) || seed; } catch (e) { db = seed; }
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} };
-
+  // The data and all rules (search, conflicts, history) live in the C backend.
+  // This page only calls its API.
+  const API = location.protocol === "file:" ? "http://localhost:8080" : "";
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-  // ---------- Logic ----------
-  function findConflict(room, slot, skip) {
-    return db.classes.findIndex((c, i) => i !== skip && same(c.room, room) && same(c.slot, slot));
+  async function post(path, data) {
+    const r = await fetch(API + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(data)
+    });
+    return r.json();
   }
 
-  function conflictedIndexes() {
-    const set = new Set();
-    db.classes.forEach((c, i) => { if (findConflict(c.room, c.slot, i) >= 0) set.add(i); });
-    return set;
-  }
+  async function render() {
+    try {
+      const key = $("q").value.trim();
+      const [cd, hd] = await Promise.all([
+        fetch(API + "/api/classes?q=" + encodeURIComponent(key)).then(r => r.json()),
+        fetch(API + "/api/history").then(r => r.json())
+      ]);
 
-  function directions(c) {
-    return `Go to ${c.building}, take the stairs/lift to floor ${c.room.trim().charAt(0)}, find room ${c.room}.`;
-  }
+      $("conflicts").innerHTML = cd.conflicts.length
+        ? `<div class="warn"><b>Conflicting room allocations:</b> ${cd.conflicts.map(esc).join("; ")}</div>`
+        : "";
 
-  // ---------- Rendering ----------
-  function render() {
-    const key = $("q").value.trim().toLowerCase();
-    const bad = conflictedIndexes();
+      $("results").innerHTML = cd.classes.length ? cd.classes.map(c => `
+        <div class="result">
+          <h3>${esc(c.subject)}${c.conflict ? '<span class="badge">CONFLICT</span>' : ""}</h3>
+          <div class="meta">${esc(c.faculty)} &middot; ${esc(c.cls)} &middot; ${esc(c.slot)}</div>
+          <div class="room">Room ${esc(c.room)}</div>
+          <div class="meta">${esc(c.building)}</div>
+          <div class="dir">${esc(c.directions)}</div>
+          <div class="row">
+            <input id="nr${c.id}" placeholder="New room" style="max-width:120px">
+            <button class="ghost" onclick="changeRoom(${c.id})">Change room</button>
+          </div>
+          <div id="m${c.id}" class="msg"></div>
+        </div>`).join("") : `<div class="empty">No match found.</div>`;
 
-    // conflict banner
-    $("conflicts").innerHTML = bad.size
-      ? `<div class="warn"><b>Conflicting room allocations:</b> ` +
-        [...bad].map(i => `${esc(db.classes[i].subject)} (${esc(db.classes[i].cls)}, room ${esc(db.classes[i].room)}, ${esc(db.classes[i].slot)})`).join("; ") + `</div>`
-      : "";
-
-    // results
-    const list = db.classes
-      .map((c, i) => ({ c, i }))
-      .filter(({ c }) => !key || [c.subject, c.faculty, c.cls].some(t => t.toLowerCase().includes(key)));
-
-    $("results").innerHTML = list.length ? list.map(({ c, i }) => `
-      <div class="result">
-        <h3>${esc(c.subject)}${bad.has(i) ? '<span class="badge">CONFLICT</span>' : ""}</h3>
-        <div class="meta">${esc(c.faculty)} &middot; ${esc(c.cls)} &middot; ${esc(c.slot)}</div>
-        <div class="room">Room ${esc(c.room)}</div>
-        <div class="meta">${esc(c.building)}</div>
-        <div class="dir">${esc(directions(c))}</div>
-        <div class="row">
-          <input id="nr${i}" placeholder="New room" style="max-width:120px">
-          <button class="ghost" onclick="changeRoom(${i})">Change room</button>
-        </div>
-        <div id="m${i}" class="msg"></div>
-      </div>`).join("") : `<div class="empty">No match found.</div>`;
-
-    // history
-    $("history").innerHTML = db.history.length
-      ? db.history.slice().reverse().map(h =>
-          `<li><b>${esc(h.subject)}</b> (${esc(h.cls)}): Room ${esc(h.oldRoom)} <span class="arrow">&rarr;</span> Room ${esc(h.newRoom)}
-           <span class="meta">&middot; ${esc(h.when)}</span></li>`).join("")
-      : `<li class="empty">No room changes yet.</li>`;
-  }
-
-  function changeRoom(i) {
-    const c = db.classes[i];
-    const nr = $("nr" + i).value.trim();
-    const msg = $("m" + i);
-    if (!nr) { msg.className = "msg bad"; msg.textContent = "Enter a new room."; return; }
-    const k = findConflict(nr, c.slot, i);
-    if (k >= 0) {
-      msg.className = "msg bad";
-      msg.textContent = `Conflict: room ${nr} at ${c.slot} is used by ${db.classes[k].subject} (${db.classes[k].cls}).`;
-      return;
+      $("history").innerHTML = hd.history.length
+        ? hd.history.slice().reverse().map(h =>
+            `<li><b>${esc(h.subject)}</b> (${esc(h.cls)}): Room ${esc(h.oldRoom)} <span class="arrow">&rarr;</span> Room ${esc(h.newRoom)}
+             <span class="meta">&middot; ${esc(h.when)}</span></li>`).join("")
+        : `<li class="empty">No room changes yet.</li>`;
+    } catch (e) {
+      $("conflicts").innerHTML = "";
+      $("results").innerHTML = `<div class="warn">Cannot reach the C backend.
+        Start it with <b>./server</b> and open <b>http://localhost:8080</b>.</div>`;
     }
-    db.history.push({ subject: c.subject, cls: c.cls, oldRoom: c.room, newRoom: nr,
-                      when: new Date().toLocaleString() });
-    c.room = nr;
-    save(); render();
   }
 
-  $("addForm").addEventListener("submit", e => {
+  async function changeRoom(id) {
+    const msg = $("m" + id);
+    try {
+      const res = await post("/api/change", { id, room: $("nr" + id).value.trim() });
+      if (res.ok) render();
+      else { msg.className = "msg bad"; msg.textContent = res.error; }
+    } catch (e) { msg.className = "msg bad"; msg.textContent = "Backend not reachable."; }
+  }
+
+  $("addForm").addEventListener("submit", async e => {
     e.preventDefault();
+    const msg = $("addMsg");
     const f = Object.fromEntries(new FormData(e.target));
     Object.keys(f).forEach(k => f[k] = f[k].trim());
-    const k = findConflict(f.room, f.slot, -1);
-    const msg = $("addMsg");
-    if (k >= 0) {
-      msg.className = "msg bad";
-      msg.textContent = `Conflict: room ${f.room} at ${f.slot} is already used by ${db.classes[k].subject} (${db.classes[k].cls}).`;
-      return;
-    }
-    db.classes.push(f);
-    save(); render();
-    e.target.reset();
-    msg.className = "msg ok";
-    msg.textContent = "Class added.";
+    try {
+      const res = await post("/api/add", f);
+      if (res.ok) { e.target.reset(); msg.className = "msg ok"; msg.textContent = "Class added."; render(); }
+      else { msg.className = "msg bad"; msg.textContent = res.error; }
+    } catch (err) { msg.className = "msg bad"; msg.textContent = "Backend not reachable."; }
   });
 
   $("q").addEventListener("input", render);
