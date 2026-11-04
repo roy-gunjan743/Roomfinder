@@ -250,7 +250,7 @@ static void apiChange(int fd, const char *body) {
 
 static void serveIndex(int fd) {
     FILE *f = fopen("index.html", "rb");
-    if (!f) { sendResp(fd, "text/plain", "index.html not found", 19); return; }
+    if (!f) { sendResp(fd, "text/plain", "index.html not found", (int)strlen("index.html not found")); return; }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     rewind(f);
